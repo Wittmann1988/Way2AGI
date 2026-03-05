@@ -16,6 +16,19 @@ export type { DriveSignal } from './drives/registry.js';
 export { MetaController } from './metacontroller.js';
 export { InitiativeEngine } from './initiative.js';
 export type { MemoryBridge } from './initiative.js';
+export { InternalMonologue } from './monologue.js';
+export type { Thought, ThoughtType } from './monologue.js';
+export { CognitiveScheduler, registerDefaultTasks } from './scheduler.js';
+export type { ScheduledTask, TaskSchedule } from './scheduler.js';
+export { ReflectionEngine } from './reflection.js';
+export type {
+  LLMClient,
+  Layer2Result,
+  Layer2Recommendation,
+  Layer3Result,
+  RulePatch,
+  ReflectionConfig,
+} from './reflection.js';
 
 export type {
   Goal,
@@ -38,5 +51,8 @@ export function createCognitiveCore() {
   const controller = new MetaController(workspace, goals, drives);
   const initiative = new InitiativeEngine(workspace, goals, drives);
 
-  return { workspace, goals, drives, controller, initiative };
+  const monologue = new InternalMonologue();
+  const scheduler = new CognitiveScheduler(workspace, goals);
+
+  return { workspace, goals, drives, controller, initiative, monologue, scheduler };
 }
