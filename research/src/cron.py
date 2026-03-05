@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .arxiv_crawler import crawl_and_score, save_report, print_report
+from .pipeline import run_full_pipeline
 
 
 async def run_daily_research(
@@ -166,6 +167,9 @@ if __name__ == "__main__":
     parser.add_argument("--install-cron", action="store_true", help="Print crontab entry")
     parser.add_argument("--install-systemd", action="store_true", help="Print systemd files")
 
+    parser.add_argument("--full", action="store_true",
+                        help="Run full pipeline (deep analysis + self-improvement)")
+
     args = parser.parse_args()
 
     if args.install_cron:
@@ -180,8 +184,18 @@ if __name__ == "__main__":
         print(timer)
         sys.exit(0)
 
-    asyncio.run(run_daily_research(
-        output_dir=args.output,
-        notify_url=args.notify,
-        threshold=args.threshold,
-    ))
+    if args.full:
+        # Full pipeline: crawl + deep analysis + self-improvement + progress tracking
+        import os
+        asyncio.run(run_full_pipeline(
+            output_dir=args.output,
+            notify_url=args.notify,
+            github_token=os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"),
+        ))
+    else:
+        # Quick scan only (no deep analysis)
+        asyncio.run(run_daily_research(
+            output_dir=args.output,
+            notify_url=args.notify,
+            threshold=args.threshold,
+        ))
