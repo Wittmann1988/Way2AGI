@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "way2agi-research"
+version = "0.1.0"
+description = "arXiv crawler, goal alignment scorer, concept generator"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.9",
+    "feedparser>=6.0",
+]
+
+[project.optional-dependencies]
+full = ["feedparser>=6.0", "httpx>=0.27"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
