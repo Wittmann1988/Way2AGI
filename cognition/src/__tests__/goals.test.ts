@@ -187,7 +187,7 @@ describe('GoalManager', () => {
       expect(goals.getById(parent.id)?.status).toBe('completed');
     });
 
-    it('auto-completes parent when children are completed or abandoned', () => {
+    it('auto-completes parent when last child completes and others are abandoned', () => {
       const { goals } = setup();
 
       const parent = goals.create({ type: 'task', description: 'parent', priority: 7, source: 'user' });
@@ -199,9 +199,13 @@ describe('GoalManager', () => {
       goals.transition(child1.id, 'active');
       goals.transition(child2.id, 'active');
 
-      goals.transition(child1.id, 'completed');
+      // Abandon child2 first (does NOT trigger parent check -- only 'completed' does)
       goals.transition(child2.id, 'abandoned');
+      expect(goals.getById(parent.id)?.status).toBe('active');
 
+      // Complete child1 -- now checkParentCompletion fires and sees
+      // child1=completed, child2=abandoned -> both terminal -> parent completes
+      goals.transition(child1.id, 'completed');
       expect(goals.getById(parent.id)?.status).toBe('completed');
     });
 
