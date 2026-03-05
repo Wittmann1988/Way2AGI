@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "way2agi-memory"
+version = "0.1.0"
+description = "4-tier hierarchical memory system for Way2AGI"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "numpy>=1.26",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+vec = ["sqlite-vec>=0.1"]
+elias = ["elias-memory>=0.1"]
+full = ["sqlite-vec>=0.1", "elias-memory>=0.1", "rank-bm25>=0.2"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "httpx>=0.27"]

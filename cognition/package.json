@@ -1,0 +1,24 @@
+{
+  "name": "@way2agi/cognition",
+  "version": "0.1.0",
+  "description": "Cognitive core — Global Workspace, Goals, Drives, Metacognition",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "rxjs": "^7.8",
+    "eventemitter3": "^5.0",
+    "uuid": "^11.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9",
+    "tsx": "^4.19",
+    "vitest": "^3.0",
+    "@types/node": "^22.0",
+    "@types/uuid": "^10.0"
+  }
+}

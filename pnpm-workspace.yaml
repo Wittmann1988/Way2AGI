@@ -1,0 +1,7 @@
+packages:
+  - gateway
+  - cognition
+  - channels
+  - canvas
+  - voice
+  - onboarding

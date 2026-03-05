@@ -1,0 +1,23 @@
+{
+  "name": "way2agi",
+  "version": "0.1.0",
+  "description": "Cognitive AI Agent — The Way to AGI",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "start": "node gateway/dist/daemon.js",
+    "daemon": "node gateway/dist/daemon.js --daemon"
+  },
+  "author": "Erik Erdmann <erikerdmann.ee@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Wittmann1988/Way2AGI"
+  }
+}

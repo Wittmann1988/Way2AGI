@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "18789:18789"
+    environment:
+      - WAY2AGI_PORT=18789
+      - WAY2AGI_MEMORY_URL=http://memory:5000
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    depends_on:
+      memory:
+        condition: service_healthy
+    restart: unless-stopped
+
+  memory:
+    build:
+      context: ./memory
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    volumes:
+      - memory-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  memory-data:
