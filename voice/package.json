@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@way2agi/cognition": "workspace:*",
-    "node-edge-tts": "^1.3"
+    "node-edge-tts": "^1.2"
   },
   "devDependencies": {
     "typescript": "^5.9",
