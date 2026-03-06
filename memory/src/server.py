@@ -1,18 +1,19 @@
 """
 Way2AGI Memory Server — FastAPI bridge between TS cognitive core and Python ML layer.
 
-Exposes the 4-tier memory system:
-- Episodic Buffer (working memory)
-- Episodic Memory (events + outcomes)
-- Semantic Memory (facts + concepts via elias-memory)
-- Procedural Memory (skill traces)
+Exposes the 4-tier memory system backed by elias-memory:
+- Episodic Buffer (working memory, in-memory with auto-eviction)
+- Episodic Memory (events + outcomes, persisted via elias-memory)
+- Semantic Memory (facts + concepts via elias-memory vector search)
+- Procedural Memory (skill traces, persisted via elias-memory)
 
 Plus: World Model queries, Knowledge Gap detection, Consolidation triggers.
 """
 
 from __future__ import annotations
 
-import asyncio
+import os
+from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
@@ -20,17 +21,19 @@ from typing import Any
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from elias_memory import Memory, MemoryRecord
+
 # --- Request/Response Models ---
 
 
-class MemoryQuery(BaseModel):
+class MemoryQueryReq(BaseModel):
     query: str
     top_k: int = 5
-    memory_type: str = "semantic"  # semantic | episodic | procedural
+    memory_type: str = "semantic"  # semantic | episodic | procedural | buffer
     context: dict[str, Any] | None = None
 
 
-class MemoryStore(BaseModel):
+class MemoryStoreReq(BaseModel):
     content: str
     memory_type: str = "episodic"
     metadata: dict[str, Any] | None = None
@@ -39,12 +42,12 @@ class MemoryStore(BaseModel):
 
 class KnowledgeGap(BaseModel):
     topic: str
-    coverage: float  # 0.0 = no knowledge, 1.0 = full coverage
+    coverage: float
 
 
 class SkillRate(BaseModel):
     skill: str
-    rate: float  # success rate 0.0-1.0
+    rate: float
 
 
 class Pattern(BaseModel):
@@ -58,103 +61,150 @@ class ConsolidationResult(BaseModel):
     memories_pruned: int
 
 
-# --- In-memory stores (will be backed by elias-memory + sqlite-vec) ---
+# --- Persistent store (elias-memory) + ephemeral buffer ---
 
-episodic_buffer: list[dict[str, Any]] = []
-episodic_store: list[dict[str, Any]] = []
-semantic_store: list[dict[str, Any]] = []
-procedural_store: list[dict[str, Any]] = []
+DB_PATH = os.environ.get("MEMORY_DB_PATH", "data/way2agi_memory.db")
+_memory: Memory | None = None
+_buffer: deque[dict[str, Any]] = deque(maxlen=50)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: load elias-memory, initialize stores."""
-    print("[Memory] Starting Way2AGI Memory Server")
-    # TODO: Initialize elias-memory connection
-    # TODO: Load sqlite-vec index
+    """Startup: initialize elias-memory backend."""
+    global _memory
+    print(f"[Memory] Starting Way2AGI Memory Server (db: {DB_PATH})")
+    _memory = Memory(DB_PATH)
+    print(f"[Memory] Loaded {len(_memory._records)} existing memories")
     yield
+    if _memory:
+        _memory.close()
     print("[Memory] Shutting down Memory Server")
 
 
 app = FastAPI(
     title="Way2AGI Memory Server",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
 
+def _get_memory() -> Memory:
+    assert _memory is not None, "Memory not initialized"
+    return _memory
+
+
+# --- Map Way2AGI 4-tier types to elias-memory 2 types (v1) ---
+# episodic + buffer + procedural -> "episodic" in elias-memory
+# semantic -> "semantic" in elias-memory
+# The memory_type is preserved in metadata for filtering
+
+def _to_elias_type(memory_type: str) -> str:
+    return "semantic" if memory_type == "semantic" else "episodic"
+
+
 @app.get("/health")
 async def health():
+    mem = _get_memory()
+    type_counts: dict[str, int] = {}
+    for rec in mem._records.values():
+        mt = rec.metadata.get("way2agi_type", rec.type)
+        type_counts[mt] = type_counts.get(mt, 0) + 1
     return {
         "status": "ok",
-        "version": "0.1.0",
-        "stores": {
-            "episodic_buffer": len(episodic_buffer),
-            "episodic": len(episodic_store),
-            "semantic": len(semantic_store),
-            "procedural": len(procedural_store),
-        },
+        "version": "0.2.0",
+        "backend": "elias-memory v0.1.0",
+        "total_memories": len(mem._records),
+        "buffer_size": len(_buffer),
+        "stores": type_counts,
     }
 
 
 @app.post("/memory/store")
-async def store_memory(req: MemoryStore):
+async def store_memory(req: MemoryStoreReq):
     """Store a new memory entry."""
-    entry = {
-        "content": req.content,
-        "type": req.memory_type,
-        "metadata": req.metadata or {},
-        "importance": req.importance,
-        "timestamp": datetime.now().isoformat(),
-    }
+    mem = _get_memory()
 
-    match req.memory_type:
-        case "episodic":
-            episodic_store.append(entry)
-        case "semantic":
-            semantic_store.append(entry)
-        case "procedural":
-            procedural_store.append(entry)
-        case "buffer":
-            episodic_buffer.append(entry)
-            # Buffer auto-evicts after 50 entries
-            if len(episodic_buffer) > 50:
-                episodic_buffer.pop(0)
+    # Buffer is ephemeral (in-memory only)
+    if req.memory_type == "buffer":
+        entry = {
+            "content": req.content,
+            "type": "buffer",
+            "metadata": req.metadata or {},
+            "importance": req.importance,
+            "timestamp": datetime.now().isoformat(),
+        }
+        _buffer.append(entry)
+        return {"stored": True, "type": "buffer", "buffer_size": len(_buffer)}
 
-    return {"stored": True, "type": req.memory_type, "total": len(episodic_store)}
+    # All other types go to elias-memory
+    metadata = req.metadata or {}
+    metadata["way2agi_type"] = req.memory_type
+    metadata["timestamp"] = datetime.now().isoformat()
+
+    mid = mem.add(
+        req.content,
+        type=_to_elias_type(req.memory_type),
+        importance=req.importance,
+        metadata=metadata,
+    )
+
+    return {"stored": True, "type": req.memory_type, "id": mid, "total": len(mem._records)}
 
 
 @app.post("/memory/query")
-async def query_memory(req: MemoryQuery) -> list[dict[str, Any]]:
-    """Query memories by type. TODO: vector search via elias-memory."""
-    store = {
-        "episodic": episodic_store,
-        "semantic": semantic_store,
-        "procedural": procedural_store,
-        "buffer": episodic_buffer,
-    }.get(req.memory_type, semantic_store)
+async def query_memory(req: MemoryQueryReq) -> list[dict[str, Any]]:
+    """Query memories using vector search via elias-memory."""
+    mem = _get_memory()
 
-    # Simple keyword matching for now — will be replaced by elias-memory vector search
-    results = []
-    query_lower = req.query.lower()
-    for entry in reversed(store):
-        if query_lower in entry["content"].lower():
-            results.append(entry)
-            if len(results) >= req.top_k:
+    # Buffer queries are simple keyword search (ephemeral)
+    if req.memory_type == "buffer":
+        results = []
+        query_lower = req.query.lower()
+        for entry in reversed(_buffer):
+            if query_lower in entry["content"].lower():
+                results.append(entry)
+                if len(results) >= req.top_k:
+                    break
+        return results
+
+    # Vector search via elias-memory
+    all_results = mem.recall(req.query, top_k=req.top_k * 3)
+
+    # Filter by way2agi_type
+    filtered = []
+    for rec in all_results:
+        way2agi_type = rec.metadata.get("way2agi_type", rec.type)
+        if req.memory_type == "all" or way2agi_type == req.memory_type:
+            filtered.append({
+                "id": rec.id,
+                "content": rec.content,
+                "type": way2agi_type,
+                "importance": rec.importance,
+                "metadata": rec.metadata,
+                "created_at": rec.created_at.isoformat(),
+                "access_count": rec.access_count,
+            })
+            if len(filtered) >= req.top_k:
                 break
 
-    return results
+    return filtered
+
+
+@app.post("/memory/reinforce/{memory_id}")
+async def reinforce_memory(memory_id: str):
+    """Reinforce a memory (increases access count, delays decay)."""
+    mem = _get_memory()
+    mem.reinforce(memory_id)
+    return {"reinforced": True, "id": memory_id}
 
 
 @app.get("/memory/knowledge-gaps")
 async def knowledge_gaps() -> list[KnowledgeGap]:
     """Detect topics with low coverage — feeds the Curiosity Drive."""
-    # TODO: Implement actual gap detection via embedding clustering
-    # For now, return placeholder gaps based on store analysis
-    topics = {}
-    for entry in semantic_store:
-        meta = entry.get("metadata", {})
-        topic = meta.get("topic", "general")
+    mem = _get_memory()
+    topics: dict[str, int] = {}
+    for rec in mem._records.values():
+        topic = rec.metadata.get("topic", "general")
         topics[topic] = topics.get(topic, 0) + 1
 
     if not topics:
@@ -170,11 +220,13 @@ async def knowledge_gaps() -> list[KnowledgeGap]:
 @app.get("/memory/skill-rates")
 async def skill_rates() -> list[SkillRate]:
     """Get skill success rates — feeds the Competence Drive."""
+    mem = _get_memory()
     skills: dict[str, dict[str, int]] = {}
-    for entry in procedural_store:
-        meta = entry.get("metadata", {})
-        skill = meta.get("skill", "unknown")
-        success = meta.get("success", False)
+    for rec in mem._records.values():
+        if rec.metadata.get("way2agi_type") != "procedural":
+            continue
+        skill = rec.metadata.get("skill", "unknown")
+        success = rec.metadata.get("success", False)
         if skill not in skills:
             skills[skill] = {"total": 0, "success": 0}
         skills[skill]["total"] += 1
@@ -190,30 +242,49 @@ async def skill_rates() -> list[SkillRate]:
 @app.get("/memory/patterns")
 async def recent_patterns() -> list[Pattern]:
     """Detect interaction patterns — feeds the Social Drive."""
-    # TODO: Implement actual pattern detection
-    # This will use temporal analysis of episodic memories
+    # TODO: Implement pattern detection via temporal analysis
     return []
 
 
 @app.post("/memory/consolidate")
 async def consolidate() -> ConsolidationResult:
     """Nightly consolidation: episodes -> lessons -> semantic/procedural."""
-    # TODO: Implement actual consolidation via LLM
-    # The agent re-experiences past episodes, extracts generalized lessons
-    episodes_to_process = [e for e in episodic_store if not e.get("consolidated")]
+    mem = _get_memory()
+
+    # Find unconsolidated episodic memories
+    episodes = [
+        rec for rec in mem._records.values()
+        if rec.metadata.get("way2agi_type") == "episodic"
+        and not rec.metadata.get("consolidated")
+    ]
+
     processed = 0
     lessons = 0
 
-    for ep in episodes_to_process:
-        ep["consolidated"] = True
+    for rec in episodes:
+        rec.metadata["consolidated"] = True
         processed += 1
         # TODO: LLM extraction of lessons from episode
+
+    # Run decay cycle
+    mem.decay_cycle()
+
+    # Count prunable memories (importance at floor)
+    prunable = sum(1 for r in mem._records.values() if r.importance <= 0.02)
 
     return ConsolidationResult(
         episodes_processed=processed,
         lessons_extracted=lessons,
-        memories_pruned=0,
+        memories_pruned=prunable,
     )
+
+
+@app.post("/memory/export-sft")
+async def export_sft(path: str = "data/sft_export.jsonl"):
+    """Export all memories as SFT training data."""
+    mem = _get_memory()
+    mem.export_sft(path)
+    return {"exported": len(mem._records), "path": path}
 
 
 if __name__ == "__main__":
