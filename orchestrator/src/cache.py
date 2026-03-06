@@ -24,7 +24,7 @@ from typing import Any
 from typing import Callable, Awaitable
 
 # Define locally to avoid circular import with composer.py
-LLMCallFn = Callable[[str, str], Awaitable[str]]
+LLMCallFn = Callable[[str, str, str], Awaitable[str]]
 
 
 class LLMCache:
@@ -75,20 +75,21 @@ class LLMCache:
         return text
 
     @staticmethod
-    def _make_hash(model_id: str, prompt: str) -> str:
-        """SHA-256 hash of model_id + normalized prompt, first 16 chars."""
+    def _make_hash(model_id: str, prompt: str, system: str = "") -> str:
+        """SHA-256 hash of model_id + system + normalized prompt."""
         normalized = LLMCache._normalize(prompt)
-        raw = f"{model_id}||{normalized}"
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+        norm_system = LLMCache._normalize(system)
+        raw = f"{model_id}||{norm_system}||{normalized}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
     def _entry_path(self, prompt_hash: str) -> Path:
         return self.cache_dir / f"{prompt_hash}.json"
 
     # ── Core operations ─────────────────────────────────────────────
 
-    def get(self, model_id: str, prompt: str) -> str | None:
+    def get(self, model_id: str, prompt: str, system: str = "") -> str | None:
         """Return cached response or None on miss (file backend)."""
-        prompt_hash = self._make_hash(model_id, prompt)
+        prompt_hash = self._make_hash(model_id, prompt, system)
         path = self._entry_path(prompt_hash)
 
         if not path.exists():
@@ -114,9 +115,9 @@ class LLMCache:
         self._hits += 1
         return data["response"]
 
-    async def aget(self, model_id: str, prompt: str) -> str | None:
+    async def aget(self, model_id: str, prompt: str, system: str = "") -> str | None:
         """Async get — tries Redis first, then file fallback."""
-        prompt_hash = self._make_hash(model_id, prompt)
+        prompt_hash = self._make_hash(model_id, prompt, system)
 
         # Try Redis first
         redis = await self._get_redis()
@@ -128,7 +129,7 @@ class LLMCache:
                 return json.loads(cached)
 
         # Fall back to file
-        return self.get(model_id, prompt)
+        return self.get(model_id, prompt, system)
 
     def put(
         self,
@@ -199,7 +200,7 @@ class LLMCache:
         async def cached_llm_fn(
             model_id: str, system: str, prompt: str
         ) -> str:
-            cached = cache.get(model_id, prompt)
+            cached = cache.get(model_id, prompt, system)
             if cached is not None:
                 return cached
 
@@ -208,7 +209,7 @@ class LLMCache:
                 model_id,
                 prompt,
                 response,
-                metadata={"system_preview": system[:100]},
+                metadata={"system_preview": system[:100], "system_hash": system},
             )
             return response
 

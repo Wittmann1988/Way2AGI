@@ -5,10 +5,11 @@
  * Supports: text, voice notes, images, documents, code blocks, inline keyboards.
  */
 
-import { Bot, Context } from 'grammy';
-import type { BaseChannel, IncomingMessage, OutgoingMessage, ChannelStatus } from './base.js';
+import { Bot, Context, InputFile } from 'grammy';
+import { BaseChannel } from './base.js';
+import type { IncomingMessage, OutgoingMessage, ChannelStatus } from './base.js';
 
-export class TelegramChannel implements BaseChannel {
+export class TelegramChannel extends BaseChannel {
   readonly type = 'telegram';
   readonly name: string;
 
@@ -16,9 +17,9 @@ export class TelegramChannel implements BaseChannel {
   private activeChats = new Set<string>();
   private lastActivity = 0;
   private running = false;
-  protected onMessage?: (msg: IncomingMessage) => void;
 
   constructor(token: string, name = 'Way2AGI Telegram') {
+    super();
     this.name = name;
     this.bot = new Bot(token);
     this.setupHandlers();
@@ -116,13 +117,19 @@ export class TelegramChannel implements BaseChannel {
           await this.bot.api.sendPhoto(chatId, new InputFile(msg.media.data), {
             caption: msg.text,
             parse_mode: msg.markdown ? 'MarkdownV2' : undefined,
-          } as any);
+          });
+          return;
+        case 'audio':
+          await this.bot.api.sendAudio(chatId, new InputFile(msg.media.data, msg.media.filename), {
+            caption: msg.text,
+            parse_mode: msg.markdown ? 'MarkdownV2' : undefined,
+          });
           return;
         case 'document':
           await this.bot.api.sendDocument(chatId, new InputFile(msg.media.data, msg.media.filename), {
             caption: msg.text,
             parse_mode: msg.markdown ? 'MarkdownV2' : undefined,
-          } as any);
+          });
           return;
       }
     }
@@ -133,10 +140,6 @@ export class TelegramChannel implements BaseChannel {
     });
   }
 
-  onIncoming(handler: (msg: IncomingMessage) => void): void {
-    this.onMessage = handler;
-  }
-
   getStatus(): ChannelStatus {
     return {
       connected: this.running,
@@ -145,9 +148,4 @@ export class TelegramChannel implements BaseChannel {
       lastActivity: this.lastActivity,
     };
   }
-}
-
-// grammY InputFile helper
-class InputFile {
-  constructor(public data: Buffer, public filename?: string) {}
 }

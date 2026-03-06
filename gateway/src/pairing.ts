@@ -14,7 +14,7 @@
  * Local network devices can be auto-approved (configurable).
  */
 
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes, createHash, timingSafeEqual } from 'crypto';
 
 export interface DeviceInfo {
   id: string;
@@ -53,7 +53,12 @@ export class DevicePairingManager {
   }) {
     this.autoApproveLocal = options?.autoApproveLocal ?? true;
     this.trustedNetworks = options?.trustedNetworks ?? [
-      '192.168.', '10.', '172.16.', '172.17.', '172.18.',
+      '192.168.', '10.',
+      // RFC 1918: 172.16.0.0/12 = 172.16.x.x through 172.31.x.x
+      '172.16.', '172.17.', '172.18.', '172.19.',
+      '172.20.', '172.21.', '172.22.', '172.23.',
+      '172.24.', '172.25.', '172.26.', '172.27.',
+      '172.28.', '172.29.', '172.30.', '172.31.',
     ];
   }
 
@@ -96,13 +101,16 @@ export class DevicePairingManager {
       .update(challenge.nonce)
       .digest('hex');
 
-    if (signedNonce !== expectedHash) {
-      // Check if auto-approve is enabled for local network
-      if (this.autoApproveLocal && this.isLocalNetwork(challenge.device.localIp)) {
-        // Auto-approve local devices
-      } else {
-        return { success: false, error: 'Invalid signature' };
-      }
+    // Timing-safe comparison to prevent timing attacks
+    const expectedBuf = Buffer.from(expectedHash, 'utf-8');
+    const receivedBuf = Buffer.from(signedNonce, 'utf-8');
+    const hashMatch = expectedBuf.length === receivedBuf.length &&
+      timingSafeEqual(expectedBuf, receivedBuf);
+
+    if (!hashMatch) {
+      // Auto-approve only applies to valid signatures on local network
+      // A wrong signature is ALWAYS rejected regardless of network
+      return { success: false, error: 'Invalid signature' };
     }
 
     // Generate device token
@@ -122,10 +130,18 @@ export class DevicePairingManager {
     return { success: true, token };
   }
 
-  /** Authenticate a returning device by token */
+  /** Authenticate a returning device by token (timing-safe) */
   authenticate(deviceId: string, token: string): PairedDevice | null {
     const device = this.pairedDevices.get(deviceId);
-    if (!device || device.token !== token) return null;
+    if (!device) return null;
+
+    // Timing-safe token comparison
+    const storedBuf = Buffer.from(device.token, 'utf-8');
+    const receivedBuf = Buffer.from(token, 'utf-8');
+    if (storedBuf.length !== receivedBuf.length ||
+        !timingSafeEqual(storedBuf, receivedBuf)) {
+      return null;
+    }
 
     device.lastSeen = Date.now();
     return device;

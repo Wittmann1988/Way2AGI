@@ -94,12 +94,8 @@ class CircuitBreaker:
 
     @property
     def state(self) -> CircuitState:
-        # Auto-transition OPEN -> HALF_OPEN after recovery_timeout
-        if (
-            self._state == CircuitState.OPEN
-            and time.monotonic() - self._opened_at >= self.recovery_timeout
-        ):
-            self._transition(CircuitState.HALF_OPEN)
+        # Note: auto-transition is now handled inside call() under lock.
+        # This property returns the current state without side effects.
         return self._state
 
     @property
@@ -111,21 +107,28 @@ class CircuitBreaker:
     async def call(self, fn: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any) -> Any:
         """Wrap an async function call with circuit-breaker logic."""
         async with self._lock:
-            current = self.state  # triggers auto-transition check
+            # Auto-transition OPEN -> HALF_OPEN after recovery_timeout (under lock)
+            if (
+                self._state == CircuitState.OPEN
+                and time.monotonic() - self._opened_at >= self.recovery_timeout
+            ):
+                self._transition(CircuitState.HALF_OPEN)
+
+            current = self._state
 
             if current == CircuitState.OPEN:
                 retry_after = self.recovery_timeout - (time.monotonic() - self._opened_at)
                 raise CircuitOpenError(self.name, max(retry_after, 0.0))
 
             if current == CircuitState.HALF_OPEN and self._half_open_calls >= self.half_open_max:
-                # Too many test calls already in flight — reject
                 raise CircuitOpenError(self.name, self.recovery_timeout)
 
             if current == CircuitState.HALF_OPEN:
                 self._half_open_calls += 1
 
+            self._stats.total_calls += 1
+
         # Execute outside the lock so we don't block other callers
-        self._stats.total_calls += 1
         try:
             result = await fn(*args, **kwargs)
         except Exception as exc:

@@ -172,14 +172,28 @@ class ModelComposer:
                 return "No models available for this domain."
             return await llm_fn(best.id, "Answer concisely.", prompt)
 
-        # Phase 1: All experts answer independently
-        expert_responses = await asyncio.gather(
+        # Phase 1: All experts answer independently (tolerate individual failures)
+        raw_results = await asyncio.gather(
             *(llm_fn(
                 expert.id,
                 f"You are an expert in {domain}. Answer thoroughly.",
                 prompt,
-            ) for expert in experts)
+            ) for expert in experts),
+            return_exceptions=True,
         )
+        # Filter out failed experts
+        expert_responses = []
+        valid_experts = []
+        for expert, result in zip(experts, raw_results):
+            if isinstance(result, str):
+                expert_responses.append(result)
+                valid_experts.append(expert)
+            else:
+                logger.warning("MoA expert %s failed: %s", expert.id, result)
+        experts = valid_experts
+
+        if not expert_responses:
+            return "All expert models failed."
 
         # Phase 2: Aggregator synthesizes
         agg_model = aggregator_model or (

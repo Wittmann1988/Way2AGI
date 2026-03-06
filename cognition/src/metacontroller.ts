@@ -30,6 +30,8 @@ const REACTION_DEBOUNCE = 50; // ms — batch items arriving within this window
 const REFLECTION_TIMER_MS = 5 * 60 * 1_000; // 5 minutes between timer reflections
 const FAILURE_THRESHOLD = 3; // consecutive failures before triggering reflection
 const NOVELTY_THRESHOLD = 0.8;
+const MAX_PENDING_REFLECTIONS = 20;
+const GOAL_CONFLICT_COOLDOWN_MS = 60_000; // 60s between goal_conflict reflections
 
 export class MetaController {
   private workspace: GlobalWorkspace;
@@ -47,6 +49,7 @@ export class MetaController {
   private pendingReactions: WorkspaceItem[] = [];
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private lastReflectionTime = 0;
+  private lastGoalConflictTime = 0;
 
   // Metrics
   private _reactionsCount = 0;
@@ -300,8 +303,11 @@ export class MetaController {
       }, 3, 3);
     }
 
-    // Trigger 3: Goal conflicts (>3 active goals competing for attention)
-    if (this.state.activeGoals.length > 3) {
+    // Trigger 3: Goal conflicts (>3 active goals competing for attention, with cooldown)
+    const now2 = Date.now();
+    if (this.state.activeGoals.length > 3 &&
+        now2 - this.lastGoalConflictTime >= GOAL_CONFLICT_COOLDOWN_MS) {
+      this.lastGoalConflictTime = now2;
       this.requestReflection('goal_conflict', {
         goalCount: this.state.activeGoals.length,
       }, 5, 2);
@@ -315,6 +321,10 @@ export class MetaController {
     layer: 2 | 3,
   ): void {
     const req: ReflectionRequest = { trigger, context, urgency, layer };
+    // Bound pending reflections to prevent memory leak
+    if (this.state.pendingReflections.length >= MAX_PENDING_REFLECTIONS) {
+      this.state.pendingReflections.shift();
+    }
     this.state.pendingReflections.push(req);
     this.log.info('reflection triggered', { trigger, urgency, layer, context });
     this.onReflectionRequest?.(req);

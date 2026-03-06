@@ -48,7 +48,9 @@ export class InitiativeEngine {
   start(): void {
     if (this.running) return;
     this.running = true;
-    this.interval = setInterval(() => this.cycle(), this.cycleMs);
+    this.interval = setInterval(() => {
+      this.cycle().catch(err => console.error('[Initiative] cycle error:', err));
+    }, this.cycleMs);
   }
 
   stop(): void {

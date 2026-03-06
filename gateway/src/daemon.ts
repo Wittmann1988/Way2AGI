@@ -59,8 +59,8 @@ async function main() {
     res.end();
   });
 
-  // WebSocket server
-  const wss = new WebSocketServer({ server: httpServer });
+  // WebSocket server (max 1MB messages to prevent DoS)
+  const wss = new WebSocketServer({ server: httpServer, maxPayload: 1024 * 1024 });
 
   wss.on('connection', (ws, req) => {
     const id = crypto.randomUUID();
@@ -105,10 +105,15 @@ async function main() {
     const type = msg.type as string;
 
     switch (type) {
-      case 'identify':
-        client.role = (msg.role as ClientConnection['role']) ?? 'client';
-        client.name = (msg.name as string) ?? 'unknown';
+      case 'identify': {
+        const allowedRoles: ClientConnection['role'][] = ['client', 'channel', 'device'];
+        const requestedRole = msg.role as string;
+        client.role = allowedRoles.includes(requestedRole as any) ? requestedRole as ClientConnection['role'] : 'client';
+        // Sanitize name: alphanumeric, dash, underscore only (max 32 chars)
+        const rawName = (msg.name as string) ?? 'unknown';
+        client.name = rawName.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32) || 'unknown';
         break;
+      }
 
       case 'perception':
         // External input enters the workspace
@@ -147,7 +152,11 @@ async function main() {
     const msg = JSON.stringify({ type: 'cognitive:event', event });
     for (const client of clients.values()) {
       if (client.ws.readyState === WebSocket.OPEN) {
-        client.ws.send(msg);
+        try {
+          client.ws.send(msg);
+        } catch {
+          // Client may have disconnected between readyState check and send
+        }
       }
     }
   });

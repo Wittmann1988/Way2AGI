@@ -132,7 +132,7 @@ async def health():
         type_counts[mt] = type_counts.get(mt, 0) + 1
     return {
         "status": "ok",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "backend": "elias-memory v0.1.0",
         "total_memories": len(mem._records),
         "buffer_size": len(_buffer),
@@ -311,9 +311,15 @@ async def consolidate() -> ConsolidationResult:
 @app.post("/memory/export-sft")
 async def export_sft(path: str = "data/sft_export.jsonl"):
     """Export all memories as SFT training data."""
+    # Security: prevent path traversal
+    EXPORT_ROOT = os.path.realpath("data")
+    resolved = os.path.realpath(path)
+    if not resolved.startswith(EXPORT_ROOT + os.sep) and resolved != EXPORT_ROOT:
+        return {"error": "Invalid path: must be within data/ directory", "exported": 0}
+    os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
     mem = _get_memory()
-    mem.export_sft(path)
-    return {"exported": len(mem._records), "path": path}
+    mem.export_sft(resolved)
+    return {"exported": len(mem._records), "path": resolved}
 
 
 if __name__ == "__main__":

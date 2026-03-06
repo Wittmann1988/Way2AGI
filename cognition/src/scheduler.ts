@@ -71,7 +71,9 @@ export class CognitiveScheduler {
   /** Start the scheduler loop */
   start(): void {
     if (this.timer) return;
-    this.timer = setInterval(() => this.tick(), this.tickMs);
+    this.timer = setInterval(() => {
+      this.tick().catch(err => console.error('[Scheduler] tick error:', err));
+    }, this.tickMs);
   }
 
   stop(): void {

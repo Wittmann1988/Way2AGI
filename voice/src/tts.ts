@@ -77,7 +77,7 @@ export class TTSEngine {
       const chunks: Buffer[] = [];
       const proc = spawn('edge-tts', [
         '--voice', voice,
-        '--text', ssml,
+        '--ssml', ssml,
         '--write-media', '/dev/stdout',
       ]);
       proc.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));

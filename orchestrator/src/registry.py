@@ -85,7 +85,7 @@ class CapabilityRegistry:
                     continue
                 if cap.score < min_score:
                     continue
-                if max_cost and model.cost_per_1k_output > max_cost:
+                if max_cost is not None and model.cost_per_1k_output > max_cost:
                     continue
                 if latency and model.latency_class != latency:
                     continue
