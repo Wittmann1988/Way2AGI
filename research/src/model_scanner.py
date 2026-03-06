@@ -708,7 +708,6 @@ def save_model_report(report: ModelScanReport, output_dir: str | Path) -> Path:
                 "recommendation": m.recommendation,
             }
             for m in report.models
-            if m.recommendation != "skip"
         ],
     }
 
