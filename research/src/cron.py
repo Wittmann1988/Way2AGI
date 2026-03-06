@@ -25,6 +25,7 @@ from pathlib import Path
 
 from .arxiv_crawler import crawl_and_score, save_report, print_report
 from .pipeline import run_full_pipeline
+from .model_scanner import scan_all_providers, save_model_report
 
 
 async def run_daily_research(
@@ -169,6 +170,8 @@ if __name__ == "__main__":
 
     parser.add_argument("--full", action="store_true",
                         help="Run full pipeline (deep analysis + self-improvement)")
+    parser.add_argument("--models", action="store_true",
+                        help="Scan for useful AI models across all providers")
 
     args = parser.parse_args()
 
@@ -184,7 +187,15 @@ if __name__ == "__main__":
         print(timer)
         sys.exit(0)
 
-    if args.full:
+    if args.models:
+        # Scan for useful AI models
+        async def _run_model_scan():
+            report = await scan_all_providers(verbose=True)
+            out = Path(args.output) if args.output else Path.home() / ".way2agi" / "research"
+            path = save_model_report(report, out)
+            print(f"\nReport saved: {path}")
+        asyncio.run(_run_model_scan())
+    elif args.full:
         # Full pipeline: crawl + deep analysis + self-improvement + progress tracking
         import os
         asyncio.run(run_full_pipeline(
