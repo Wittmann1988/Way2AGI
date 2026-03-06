@@ -1,0 +1,47 @@
+.way2agi-header {
+    padding: 1 2;
+    color: $accent;
+    text-align: center;
+}
+
+#dashboard-panels {
+    height: auto;
+    padding: 1 2;
+}
+
+.status-panel {
+    width: 1fr;
+    padding: 1 2;
+    border: solid $primary;
+}
+
+.actions-panel {
+    width: 1fr;
+    padding: 1 2;
+    border: solid $secondary;
+}
+
+.screen-title {
+    dock: top;
+    padding: 1 2;
+    background: $primary;
+    color: $text;
+    text-align: center;
+    text-style: bold;
+}
+
+.chat-header {
+    dock: top;
+    padding: 0 2;
+    background: $primary;
+    color: $text;
+}
+
+#chat-log {
+    height: 1fr;
+    padding: 0 1;
+}
+
+#chat-input {
+    dock: bottom;
+}
