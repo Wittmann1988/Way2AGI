@@ -512,6 +512,52 @@ async def scan_nvidia() -> list[DiscoveredModel]:
     return models
 
 
+# === xAI / Grok ===
+
+async def scan_xai() -> list[DiscoveredModel]:
+    """Scan xAI Grok models."""
+    models: list[DiscoveredModel] = []
+    xai_key = os.environ.get("XAI_API_KEY")
+    if not xai_key:
+        print("  [xAI] No XAI_API_KEY, skipping")
+        return models
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://api.x.ai/v1/models",
+                headers={"Authorization": f"Bearer {xai_key}"},
+            )
+            if resp.status_code != 200:
+                return models
+
+            for item in resp.json().get("data", []):
+                model_id = item.get("id", "")
+                ctx = item.get("context_length", 0) or item.get("context_window", 0)
+                p = _extract_params(model_id)
+
+                score, reasons = _score_model_relevance(
+                    model_id, f"xAI Grok {model_id} reasoning thinking agentic", [], p,
+                )
+                score = max(score, 0.3)  # Grok models are competitive
+                reasons.append("xAI Grok (fast reasoning)")
+
+                models.append(DiscoveredModel(
+                    id=f"xai:{model_id}", name=model_id, provider="xai",
+                    description=f"xAI Grok: {model_id}" + (f" (ctx: {ctx:,})" if ctx else ""),
+                    parameters=p, capabilities=[r.split(": ")[-1] for r in reasons],
+                    relevance_score=score, relevance_reasons=reasons,
+                    cost="cheap", context_window=ctx or None,
+                    url="https://console.x.ai",
+                    recommendation=_classify_recommendation(score, "cheap"),
+                ))
+
+    except Exception as e:
+        print(f"  [xAI] Scan failed: {e}")
+
+    return models
+
+
 # === Main Scanner ===
 
 async def scan_all_providers(verbose: bool = True) -> ModelScanReport:
@@ -540,6 +586,7 @@ async def scan_all_providers(verbose: bool = True) -> ModelScanReport:
         "Groq": scan_groq,
         "Google": scan_google,
         "NVIDIA": scan_nvidia,
+        "xAI": scan_xai,
     }
 
     if verbose:
