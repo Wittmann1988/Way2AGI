@@ -13,7 +13,7 @@ from peft import LoraConfig
 from trl import SFTTrainer, SFTConfig
 
 print("[Way2AGI] Loading dataset from HuggingFace...")
-dataset = load_dataset("erik1988/way2agi-traces", split="train")
+dataset = load_dataset("erik1988/way2agi-traces", data_files="data/train/sft-combined.jsonl", split="train")
 print(f"[Way2AGI] {len(dataset)} training examples loaded")
 
 ds = dataset.train_test_split(test_size=0.1, seed=42)

@@ -9,6 +9,14 @@
  * - Initiative Engine (autonomous goal generation)
  */
 
+import { GlobalWorkspace } from './workspace.js';
+import { GoalManager } from './goals/manager.js';
+import { DriveRegistry } from './drives/registry.js';
+import { MetaController } from './metacontroller.js';
+import { InitiativeEngine } from './initiative.js';
+import { InternalMonologue } from './monologue.js';
+import { CognitiveScheduler, registerDefaultTasks } from './scheduler.js';
+
 export { GlobalWorkspace } from './workspace.js';
 export { GoalManager } from './goals/manager.js';
 export { DriveRegistry } from './drives/registry.js';

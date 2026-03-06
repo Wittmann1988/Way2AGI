@@ -12,3 +12,9 @@ __pycache__/
 *.sqlite
 coverage/
 .turbo/
+
+# Training artifacts (too large for git)
+*.gguf
+merged_model/
+way2agi-sft/
+llama.cpp/
