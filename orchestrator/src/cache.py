@@ -1,5 +1,8 @@
 """
-Semantic-aware LLM response cache with file-based JSON storage.
+Semantic-aware LLM response cache — dual backend (file + Redis).
+
+On Desktop/Docker: Uses Redis for shared, fast caching across services.
+On Mobile/Standalone: Falls back to file-based JSON storage.
 
 Caches LLM call results keyed by model_id + normalized prompt hash.
 Supports TTL-based expiry, stats tracking, and transparent wrapping
@@ -25,13 +28,14 @@ LLMCallFn = Callable[[str, str], Awaitable[str]]
 
 
 class LLMCache:
-    """File-based LLM response cache with near-duplicate detection."""
+    """LLM response cache with file backend + optional Redis backend."""
 
     def __init__(
         self,
         cache_dir: str | Path | None = None,
         max_entries: int = 1000,
         ttl_hours: int = 24,
+        redis_url: str | None = None,
     ) -> None:
         self.cache_dir = Path(
             cache_dir or os.path.expanduser("~/.way2agi/cache/llm")
@@ -41,6 +45,25 @@ class LLMCache:
         self.ttl_hours = ttl_hours
         self._hits = 0
         self._misses = 0
+
+        # Redis backend (optional, for Docker/Desktop deployment)
+        self._redis = None
+        self._redis_url = redis_url or os.environ.get("REDIS_URL")
+
+    async def _get_redis(self):
+        """Lazy-init Redis connection."""
+        if self._redis is not None:
+            return self._redis
+        if not self._redis_url:
+            return None
+        try:
+            from redis.asyncio import Redis
+            self._redis = Redis.from_url(self._redis_url, decode_responses=True)
+            await self._redis.ping()
+            return self._redis
+        except Exception:
+            self._redis_url = None  # Disable Redis on failure
+            return None
 
     # ── Key generation ──────────────────────────────────────────────
 
@@ -64,7 +87,7 @@ class LLMCache:
     # ── Core operations ─────────────────────────────────────────────
 
     def get(self, model_id: str, prompt: str) -> str | None:
-        """Return cached response or None on miss."""
+        """Return cached response or None on miss (file backend)."""
         prompt_hash = self._make_hash(model_id, prompt)
         path = self._entry_path(prompt_hash)
 
@@ -91,6 +114,22 @@ class LLMCache:
         self._hits += 1
         return data["response"]
 
+    async def aget(self, model_id: str, prompt: str) -> str | None:
+        """Async get — tries Redis first, then file fallback."""
+        prompt_hash = self._make_hash(model_id, prompt)
+
+        # Try Redis first
+        redis = await self._get_redis()
+        if redis:
+            key = f"llm:{prompt_hash}"
+            cached = await redis.get(key)
+            if cached is not None:
+                self._hits += 1
+                return json.loads(cached)
+
+        # Fall back to file
+        return self.get(model_id, prompt)
+
     def put(
         self,
         model_id: str,
@@ -98,7 +137,7 @@ class LLMCache:
         response: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Store a response in the cache (atomic write)."""
+        """Store a response in the file cache (atomic write)."""
         prompt_hash = self._make_hash(model_id, prompt)
         entry = {
             "model_id": model_id,
@@ -122,12 +161,30 @@ class LLMCache:
                 json.dump(entry, f, ensure_ascii=False)
             os.replace(tmp_path, str(path))
         except Exception:
-            # Clean up temp file on failure
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
             raise
+
+    async def aput(
+        self,
+        model_id: str,
+        prompt: str,
+        response: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Async put — writes to both Redis and file."""
+        # File backend (always)
+        self.put(model_id, prompt, response, metadata)
+
+        # Redis backend (if available)
+        redis = await self._get_redis()
+        if redis:
+            prompt_hash = self._make_hash(model_id, prompt)
+            key = f"llm:{prompt_hash}"
+            ttl_seconds = self.ttl_hours * 3600
+            await redis.setex(key, ttl_seconds, json.dumps(response))
 
     def wrap(self, llm_fn: LLMCallFn) -> LLMCallFn:
         """
@@ -136,11 +193,6 @@ class LLMCache:
         The wrapped function checks cache first (keyed on model_id + prompt).
         On hit, returns cached response. On miss, calls the real function,
         caches the result, and returns it.
-
-        Note: the system prompt is intentionally NOT part of the cache key.
-        The same model+prompt combination is expected to have the same system
-        prompt in practice, and including it would reduce hit rates for
-        minor system prompt variations.
         """
         cache = self
 
@@ -175,6 +227,7 @@ class LLMCache:
             "hit_rate": (self._hits / total) if total > 0 else 0.0,
             "total_entries": len(entries),
             "cache_size_bytes": total_size,
+            "redis_enabled": self._redis is not None,
         }
 
     def evict_expired(self) -> int:
@@ -190,7 +243,6 @@ class LLMCache:
                     path.unlink()
                     removed += 1
             except (json.JSONDecodeError, OSError, KeyError):
-                # Corrupt entry — remove it
                 path.unlink(missing_ok=True)
                 removed += 1
         return removed
@@ -202,6 +254,11 @@ class LLMCache:
         self._hits = 0
         self._misses = 0
 
+    async def aclose(self) -> None:
+        """Close Redis connection if open."""
+        if self._redis:
+            await self._redis.aclose()
+
     # ── Internal ────────────────────────────────────────────────────
 
     def _maybe_evict(self) -> None:
@@ -210,7 +267,6 @@ class LLMCache:
             self.cache_dir.glob("*.json"),
             key=lambda p: p.stat().st_mtime,
         )
-        # Remove oldest entries if we're at the limit
         while len(entries) >= self.max_entries:
             entries[0].unlink(missing_ok=True)
             entries.pop(0)

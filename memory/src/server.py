@@ -24,6 +24,16 @@ from pydantic import BaseModel
 from elias_memory import Memory, MemoryRecord
 from .logger import create_logger
 
+# Optional telemetry (available in Docker, graceful skip on mobile)
+try:
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+    from telemetry.setup import init_telemetry
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    _HAS_TELEMETRY = True
+except ImportError:
+    _HAS_TELEMETRY = False
+
 log = create_logger("memory-server")
 
 # --- Request/Response Models ---
@@ -89,9 +99,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Way2AGI Memory Server",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
+
+# Auto-instrument with OpenTelemetry if available
+if _HAS_TELEMETRY:
+    init_telemetry("way2agi-memory")
+    FastAPIInstrumentor.instrument_app(app)
 
 
 def _get_memory() -> Memory:

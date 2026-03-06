@@ -1,35 +1,91 @@
-version: '3.8'
-
 services:
   gateway:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: gateway/Dockerfile
     ports:
       - "18789:18789"
     environment:
       - WAY2AGI_PORT=18789
-      - WAY2AGI_MEMORY_URL=http://memory:5000
+      - WAY2AGI_MEMORY_URL=http://memory:8001
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
     depends_on:
       memory:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     restart: unless-stopped
 
   memory:
     build:
       context: ./memory
-      dockerfile: Dockerfile
     ports:
-      - "5000:5000"
+      - "8001:8001"
     volumes:
       - memory-data:/app/data
+    environment:
+      - MEMORY_DB_PATH=/app/data/way2agi_memory.db
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000
+      - REDIS_URL=redis://redis:6379
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 10s
       timeout: 5s
       retries: 3
+    depends_on:
+      - redis
+      - chroma
+      - jaeger
+    restart: unless-stopped
+
+  orchestrator:
+    build:
+      context: ./orchestrator
+    ports:
+      - "8003:8003"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - CHROMA_HOST=chroma
+      - MEMORY_URL=http://memory:8001
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+    depends_on:
+      - memory
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  chroma:
+    image: chromadb/chroma:0.5.5
+    ports:
+      - "8002:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=false
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"  # UI
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
     restart: unless-stopped
 
 volumes:
   memory-data:
+  redis-data:
+  chroma-data:
