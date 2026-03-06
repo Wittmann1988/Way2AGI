@@ -22,6 +22,9 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from elias_memory import Memory, MemoryRecord
+from .logger import create_logger
+
+log = create_logger("memory-server")
 
 # --- Request/Response Models ---
 
@@ -73,11 +76,14 @@ async def lifespan(app: FastAPI):
     """Startup: initialize elias-memory backend."""
     global _memory
     print(f"[Memory] Starting Way2AGI Memory Server (db: {DB_PATH})")
+    log.info("server starting", extra={"metadata": {"db_path": DB_PATH}})
     _memory = Memory(DB_PATH)
+    log.info("memories loaded", extra={"metadata": {"count": len(_memory._records)}})
     print(f"[Memory] Loaded {len(_memory._records)} existing memories")
     yield
     if _memory:
         _memory.close()
+    log.info("server shutdown")
     print("[Memory] Shutting down Memory Server")
 
 
@@ -134,6 +140,7 @@ async def store_memory(req: MemoryStoreReq):
             "timestamp": datetime.now().isoformat(),
         }
         _buffer.append(entry)
+        log.info("memory stored", extra={"metadata": {"memory_type": "buffer", "buffer_size": len(_buffer)}})
         return {"stored": True, "type": "buffer", "buffer_size": len(_buffer)}
 
     # All other types go to elias-memory
@@ -148,6 +155,7 @@ async def store_memory(req: MemoryStoreReq):
         metadata=metadata,
     )
 
+    log.info("memory stored", extra={"metadata": {"memory_type": req.memory_type, "id": mid, "total": len(mem._records)}})
     return {"stored": True, "type": req.memory_type, "id": mid, "total": len(mem._records)}
 
 
@@ -187,6 +195,7 @@ async def query_memory(req: MemoryQueryReq) -> list[dict[str, Any]]:
             if len(filtered) >= req.top_k:
                 break
 
+    log.info("memory queried", extra={"metadata": {"memory_type": req.memory_type, "results": len(filtered)}})
     return filtered
 
 
@@ -272,6 +281,11 @@ async def consolidate() -> ConsolidationResult:
     # Count prunable memories (importance at floor)
     prunable = sum(1 for r in mem._records.values() if r.importance <= 0.02)
 
+    log.info("consolidation complete", extra={"metadata": {
+        "episodes_processed": processed,
+        "lessons_extracted": lessons,
+        "memories_pruned": prunable,
+    }})
     return ConsolidationResult(
         episodes_processed=processed,
         lessons_extracted=lessons,

@@ -34,6 +34,9 @@ from .deep_analysis import (
     ProgressEntry,
 )
 from .goals import AlignmentReport
+from .logger import create_logger
+
+log = create_logger("pipeline")
 
 
 async def run_full_pipeline(
@@ -51,6 +54,8 @@ async def run_full_pipeline(
     out = Path(output_dir) if output_dir else Path.home() / ".way2agi" / "research"
     tracker = ProgressTracker(out)
 
+    log.info("pipeline started", extra={"metadata": {"output_dir": str(out)}})
+
     if verbose:
         print(f"\n{'=' * 60}")
         print(f"  Way2AGI Full Research Pipeline")
@@ -67,6 +72,7 @@ async def run_full_pipeline(
     }
 
     # === PHASE 1: arXiv Crawl ===
+    log.info("phase started", extra={"metadata": {"phase": "1/5", "name": "arxiv_crawl"}})
     if verbose:
         print("[Phase 1/5] arXiv crawl...")
 
@@ -83,6 +89,10 @@ async def run_full_pipeline(
         "implement": arxiv_report.implement_papers,
         "study": arxiv_report.study_papers,
     }
+    log.info("arxiv crawl complete", extra={"metadata": {
+        "total": arxiv_report.total_papers,
+        "relevant": arxiv_report.relevant_papers,
+    }})
 
     # === PHASE 2: GitHub Scan (every 3 days) ===
     day_of_year = date.today().timetuple().tm_yday
@@ -107,6 +117,7 @@ async def run_full_pipeline(
             print(f"\n[Phase 2/5] GitHub scan skipped (runs every 3 days, next: day {day_of_year + (3 - day_of_year % 3)})")
 
     # === PHASE 3: Deep Analysis of top papers ===
+    log.info("phase started", extra={"metadata": {"phase": "3/5", "name": "deep_analysis"}})
     if verbose:
         print("\n[Phase 3/5] Deep analysis of top papers...")
 
@@ -151,6 +162,7 @@ async def run_full_pipeline(
                       f"Actions: {len(consensus.self_improvement_actions)}")
 
         except Exception as e:
+            log.error("deep analysis failed", extra={"metadata": {"paper": sp.paper.title[:80], "error": str(e)}})
             if verbose:
                 print(f"    Analysis failed: {e}")
 
@@ -165,6 +177,7 @@ async def run_full_pipeline(
             total_actions += 1
 
     results["improvements_proposed"] = total_actions
+    log.info("improvements registered", extra={"metadata": {"total_actions": total_actions}})
 
     if verbose:
         print(f"  {total_actions} improvement actions proposed")
@@ -185,6 +198,12 @@ async def run_full_pipeline(
     # === Notify ===
     if notify_url:
         await _send_pipeline_notification(notify_url, results, tracker)
+
+    log.info("pipeline complete", extra={"metadata": {
+        "papers": results["arxiv"]["total"] if results["arxiv"] else 0,
+        "deep_analyses": len(results["deep_analyses"]),
+        "improvements": results["improvements_proposed"],
+    }})
 
     if verbose:
         print(f"\n{'=' * 60}")

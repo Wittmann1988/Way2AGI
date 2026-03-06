@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta
 from pathlib import Path
@@ -23,8 +24,21 @@ import httpx
 
 from .goals import score_alignment, AlignmentReport, GoalID, GOALS
 
+# Import resilience patterns from orchestrator package
+import sys as _sys
+_monorepo_root = str(Path(__file__).resolve().parents[2])
+if _monorepo_root not in _sys.path:
+    _sys.path.insert(0, _monorepo_root)
+from orchestrator.src.resilience import RateLimiter, retry_with_backoff
+
+logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
+
+# Rate limiters: GitHub allows 10 search requests/min unauthenticated, 30 authenticated.
+# We use conservative limits below the actual caps.
+_github_rate_limiter_unauth = RateLimiter("github-unauth", max_calls=30, period=60.0)
+_github_rate_limiter_auth = RateLimiter("github-auth", max_calls=60, period=60.0)
 
 # Search queries aligned with our goals
 SEARCH_QUERIES = [
@@ -82,12 +96,29 @@ class GithubScanReport:
     repos: list[ScoredRepo]
 
 
+@retry_with_backoff(
+    max_retries=3,
+    base_delay=2.0,
+    max_delay=30.0,
+    retryable_exceptions=(
+        httpx.HTTPStatusError,
+        httpx.ConnectError,
+        httpx.ReadTimeout,
+        httpx.ConnectTimeout,
+        TimeoutError,
+        ConnectionError,
+    ),
+)
 async def search_github(
     query: str,
     token: str | None = None,
     max_results: int = 30,
 ) -> list[GitHubRepo]:
     """Search GitHub API for repositories matching query."""
+    # Acquire rate-limit token before calling
+    limiter = _github_rate_limiter_auth if token else _github_rate_limiter_unauth
+    await limiter.acquire()
+
     headers = {"Accept": "application/vnd.github.v3+json"}
     if token:
         headers["Authorization"] = f"token {token}"
@@ -102,7 +133,8 @@ async def search_github(
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(f"{GITHUB_API}/search/repositories", params=params, headers=headers)
         if resp.status_code == 403:
-            # Rate limited
+            # Rate limited by GitHub — log and return empty
+            logger.warning("GitHub API rate limit hit (403) for query: %s", query[:60])
             return []
         resp.raise_for_status()
         data = resp.json()

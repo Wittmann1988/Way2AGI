@@ -1,8 +1,11 @@
 /**
- * Metacognitive Controller — Layer 1 (Fast Loop, 500ms).
+ * Metacognitive Controller — Layer 1 (Hybrid Event-Driven + Heartbeat).
  *
  * FSM + Priority Queue. Handles 92% of decisions deterministically.
  * Triggers Layer 2/3 LLM reflection when needed.
+ *
+ * Event-driven reactions for new workspace items, slow heartbeat (5s)
+ * for maintenance (decay, staleness, timer-based reflection).
  *
  * Based on "Metacognitive Control in LLM Agents via Fast-Slow Loops" (ICML 2025)
  * and "Reflexion Hybrid" (2025).
@@ -17,10 +20,14 @@ import type {
 import type { GlobalWorkspace } from './workspace.js';
 import type { GoalManager } from './goals/manager.js';
 import type { DriveRegistry } from './drives/registry.js';
+import type { Subscription } from 'rxjs';
+import { createLogger } from './logger.js';
 
 type ControllerPhase = 'idle' | 'perceiving' | 'deciding' | 'acting' | 'reflecting';
 
-const CYCLE_INTERVAL = 500; // ms
+const HEARTBEAT_INTERVAL = 5_000; // 5s heartbeat for maintenance
+const REACTION_DEBOUNCE = 50; // ms — batch items arriving within this window
+const REFLECTION_TIMER_MS = 5 * 60 * 1_000; // 5 minutes between timer reflections
 const FAILURE_THRESHOLD = 3; // consecutive failures before triggering reflection
 const NOVELTY_THRESHOLD = 0.8;
 
@@ -33,6 +40,17 @@ export class MetaController {
   private timer: ReturnType<typeof setInterval> | null = null;
   private failureCount = 0;
   private onReflectionRequest?: (req: ReflectionRequest) => void;
+  private log = createLogger('metacontroller');
+
+  // Event-driven state
+  private subscription: Subscription | null = null;
+  private pendingReactions: WorkspaceItem[] = [];
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastReflectionTime = 0;
+
+  // Metrics
+  private _reactionsCount = 0;
+  private _idleCycles = 0;
 
   constructor(
     workspace: GlobalWorkspace,
@@ -52,16 +70,42 @@ export class MetaController {
     };
   }
 
-  /** Start the fast control loop */
+  /** Start the hybrid control loop (event-driven + heartbeat) */
   start(): void {
     if (this.timer) return;
-    this.timer = setInterval(() => this.cycle(), CYCLE_INTERVAL);
+
+    this.lastReflectionTime = Date.now();
+
+    // Subscribe to workspace events for immediate reactions
+    this.subscription = this.workspace.on('workspace:posted').subscribe(event => {
+      const item = event.payload as WorkspaceItem;
+      this.pendingReactions.push(item);
+
+      // Debounce: batch items arriving within REACTION_DEBOUNCE ms
+      if (!this.debounceTimer) {
+        this.debounceTimer = setTimeout(() => {
+          this.debounceTimer = null;
+          this.flushReactions();
+        }, REACTION_DEBOUNCE);
+      }
+    });
+
+    // Slow heartbeat for maintenance tasks
+    this.timer = setInterval(() => this.heartbeat(), HEARTBEAT_INTERVAL);
   }
 
   stop(): void {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    if (this.subscription) {
+      this.subscription.unsubscribe();
+      this.subscription = null;
+    }
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
     }
   }
 
@@ -70,30 +114,102 @@ export class MetaController {
     this.onReflectionRequest = handler;
   }
 
-  /** Single control cycle (~<50ms target) */
-  private cycle(): void {
+  /** Whether the system is idle (nothing to process) */
+  get isIdle(): boolean {
+    return (
+      this.workspace.size === 0 &&
+      this.state.activeGoals.length === 0 &&
+      this.drives.getActiveDrives().length === 0
+    );
+  }
+
+  /** Metrics: number of event-driven reaction batches */
+  get reactionsCount(): number {
+    return this._reactionsCount;
+  }
+
+  /** Metrics: number of skipped heartbeat cycles due to idle */
+  get idleCycles(): number {
+    return this._idleCycles;
+  }
+
+  /** Process batched reactions from workspace events */
+  private flushReactions(): void {
+    const items = this.pendingReactions.splice(0);
+    if (items.length === 0) return;
+
+    this._reactionsCount++;
+    this.log.debug('reactTo batch', { count: items.length });
+
+    for (const item of items) {
+      this.reactTo(item);
+    }
+  }
+
+  /** React immediately to a single workspace item (event-driven path) */
+  private reactTo(item: WorkspaceItem): void {
+    try {
+      this.phase = 'deciding';
+      this.applyRules(item);
+
+      this.phase = 'acting';
+      this.processDrives();
+    } catch (err) {
+      this.log.error('reactTo error', { phase: this.phase, error: String(err) });
+    }
+
+    this.phase = 'idle';
+  }
+
+  /** Heartbeat — slow maintenance cycle (every 5s) */
+  private heartbeat(): void {
     this.state.cycleCount++;
 
-    // Phase 1: Perceive — scan workspace
-    this.phase = 'perceiving';
-    const focus = this.workspace.selectFocus();
-    this.state.currentFocus = focus;
+    // If idle, skip heavy processing
+    if (this.isIdle) {
+      this._idleCycles++;
+      if (this.state.cycleCount % 10 === 0) {
+        this.log.debug('heartbeat idle', { cycleCount: this.state.cycleCount, idleCycles: this._idleCycles });
+      }
+      // Still check timer-based reflection even when idle
+      this.checkReflectionTriggers();
+      return;
+    }
 
-    // Phase 2: Decide — apply rules
-    this.phase = 'deciding';
-    this.applyRules(focus);
+    // Full maintenance cycle
+    this.cycle();
+  }
 
-    // Phase 3: Act — process drive signals, manage goals
-    this.phase = 'acting';
-    this.processDrives();
-    this.updateGoalStates();
+  /** Single control cycle (~<50ms target) — used by heartbeat for maintenance */
+  private cycle(): void {
+    if (this.state.cycleCount % 100 === 0) {
+      this.log.debug('cycle tick', { cycleCount: this.state.cycleCount });
+    }
 
-    // Phase 4: Check reflection triggers
-    this.phase = 'reflecting';
-    this.checkReflectionTriggers();
+    try {
+      // Phase 1: Perceive — scan workspace
+      this.phase = 'perceiving';
+      const focus = this.workspace.selectFocus();
+      this.state.currentFocus = focus;
 
-    // Decay drives slightly each cycle
-    this.drives.decayAll();
+      // Phase 2: Decide — apply rules
+      this.phase = 'deciding';
+      this.applyRules(focus);
+
+      // Phase 3: Act — process drive signals, manage goals
+      this.phase = 'acting';
+      this.processDrives();
+      this.updateGoalStates();
+
+      // Phase 4: Check reflection triggers
+      this.phase = 'reflecting';
+      this.checkReflectionTriggers();
+
+      // Decay drives slightly each cycle
+      this.drives.decayAll();
+    } catch (err) {
+      this.log.error('phase error', { phase: this.phase, error: String(err) });
+    }
 
     this.phase = 'idle';
   }
@@ -173,8 +289,10 @@ export class MetaController {
       this.failureCount = 0;
     }
 
-    // Trigger 2: Timer-based deep reflection (every 600 cycles = ~5min)
-    if (this.state.cycleCount % 600 === 0) {
+    // Trigger 2: Timer-based deep reflection (every 5 minutes of wall-clock time)
+    const now = Date.now();
+    if (now - this.lastReflectionTime >= REFLECTION_TIMER_MS) {
+      this.lastReflectionTime = now;
       this.requestReflection('timer', {
         cycleCount: this.state.cycleCount,
         activeGoals: this.state.activeGoals.length,
@@ -198,6 +316,7 @@ export class MetaController {
   ): void {
     const req: ReflectionRequest = { trigger, context, urgency, layer };
     this.state.pendingReflections.push(req);
+    this.log.info('reflection triggered', { trigger, urgency, layer, context });
     this.onReflectionRequest?.(req);
   }
 

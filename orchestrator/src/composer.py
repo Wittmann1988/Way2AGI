@@ -14,10 +14,16 @@ Based on "Mixture of Agents" (arXiv:2406.02428) and
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 
 from .registry import CapabilityRegistry, ModelSpec
+import httpx
+from .cache import LLMCache
+from .resilience import CircuitBreaker, retry_with_backoff
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -47,12 +53,50 @@ LLMCallFn = Callable[[str, str, str], Awaitable[str]]  # (model_id, system, prom
 class ModelComposer:
     """Orchestrates multi-model task execution."""
 
-    def __init__(self, registry: CapabilityRegistry, llm_call: LLMCallFn) -> None:
+    def __init__(
+        self,
+        registry: CapabilityRegistry,
+        llm_call: LLMCallFn,
+        cache: LLMCache | None = None,
+    ) -> None:
         self.registry = registry
         self.llm_call = llm_call
+        self.cache = cache
+        self._circuit = CircuitBreaker(
+            "llm-composer",
+            failure_threshold=5,
+            recovery_timeout=60.0,
+            half_open_max=2,
+        )
+
+    @property
+    def _call(self) -> LLMCallFn:
+        """Return resilient LLM call: cache -> retry -> circuit breaker."""
+        base_fn = self.llm_call
+        if self.cache is not None:
+            base_fn = self.cache.wrap(base_fn)
+
+        @retry_with_backoff(
+            max_retries=2,
+            base_delay=1.0,
+            max_delay=15.0,
+            retryable_exceptions=(
+                httpx.HTTPStatusError,
+                httpx.ConnectError,
+                httpx.ReadTimeout,
+                httpx.ConnectTimeout,
+                TimeoutError,
+                ConnectionError,
+            ),
+        )
+        async def resilient_call(model_id: str, system: str, prompt: str) -> str:
+            return await self._circuit.call(base_fn, model_id, system, prompt)
+
+        return resilient_call
 
     async def execute_chain(self, plan: CompositionPlan) -> str:
         """Execute subtasks sequentially, piping output to next input."""
+        llm_fn = self._call
         context = ""
         for subtask in plan.subtasks:
             if not subtask.assigned_model:
@@ -68,7 +112,7 @@ class ModelComposer:
             if context and subtask.input_data:
                 prompt = f"Previous context:\n{context}\n\nTask:\n{subtask.input_data}"
 
-            subtask.result = await self.llm_call(
+            subtask.result = await llm_fn(
                 subtask.assigned_model.id,
                 f"You are performing subtask: {subtask.description}",
                 prompt,
@@ -80,6 +124,8 @@ class ModelComposer:
 
     async def execute_parallel(self, plan: CompositionPlan) -> list[str]:
         """Execute independent subtasks in parallel."""
+        llm_fn = self._call
+
         async def run_subtask(subtask: SubTask) -> str:
             if not subtask.assigned_model:
                 subtask.assigned_model = self.registry.find_best(
@@ -89,7 +135,7 @@ class ModelComposer:
                 return ""
 
             subtask.status = "running"
-            subtask.result = await self.llm_call(
+            subtask.result = await llm_fn(
                 subtask.assigned_model.id,
                 f"You are performing subtask: {subtask.description}",
                 subtask.input_data,
@@ -114,6 +160,8 @@ class ModelComposer:
         Mixture-of-Agents: multiple models answer independently,
         then an aggregator synthesizes the best response.
         """
+        llm_fn = self._call
+
         # Select diverse experts
         candidates = self.registry.find_by_capability(domain, min_score=0.6)
         experts = candidates[:n_experts]
@@ -122,11 +170,11 @@ class ModelComposer:
             best = self.registry.find_best(domain)
             if not best:
                 return "No models available for this domain."
-            return await self.llm_call(best.id, "Answer concisely.", prompt)
+            return await llm_fn(best.id, "Answer concisely.", prompt)
 
         # Phase 1: All experts answer independently
         expert_responses = await asyncio.gather(
-            *(self.llm_call(
+            *(llm_fn(
                 expert.id,
                 f"You are an expert in {domain}. Answer thoroughly.",
                 prompt,
@@ -150,7 +198,7 @@ Expert responses:
 
 Synthesize the best answer from these expert responses. Keep the strongest insights, resolve contradictions, and produce a superior unified response."""
 
-        return await self.llm_call(
+        return await llm_fn(
             agg_id,
             "You are a synthesis expert. Combine multiple expert opinions into one superior answer.",
             synthesis_prompt,
