@@ -1,5 +1,6 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/Way2AGI-v0.1.0-blueviolet?style=for-the-badge" alt="version"/>
+  <img src="https://img.shields.io/badge/Status-Work%20In%20Progress-orange?style=for-the-badge" alt="WIP"/>
+  <img src="https://img.shields.io/badge/Way2AGI-v0.1.0--alpha-blueviolet?style=for-the-badge" alt="version"/>
   <img src="https://img.shields.io/badge/TypeScript-5.9-blue?style=for-the-badge&logo=typescript" alt="typescript"/>
   <img src="https://img.shields.io/badge/Python-3.12-green?style=for-the-badge&logo=python" alt="python"/>
   <img src="https://img.shields.io/github/license/Wittmann1988/Way2AGI?style=for-the-badge" alt="license"/>
@@ -99,42 +100,46 @@ These goals guide **every decision, every line of code, every research direction
 
 ## Architecture
 
-```
-                    +------------------------------------------+
-                    |        METACOGNITIVE LAYERS               |
-                    |                                          |
-                    |  Layer 3 (5-10min)  Deep Self-Modification|
-                    |  Layer 2 (5-30s)    Async LLM Reflection  |
-                    |  Layer 1 (500ms)    Fast FSM Controller   |
-                    +------------------------------------------+
-                                      |
-              +-----------------------+-----------------------+
-              |                                               |
-    +---------v---------+                         +-----------v-----------+
-    | COGNITIVE CORE    |                         | INTEGRATION LAYER     |
-    | (TypeScript)      |                         | (TypeScript)          |
-    |                   |                         |                       |
-    | Global Workspace  |    WebSocket API        | Telegram  (grammy)    |
-    | Goal Manager      |<----------------------->| Matrix    (sdk)       |
-    | Drive Registry    |    :18789               | Discord   (discord.js)|
-    | Initiative Engine |                         | Voice I/O (edge-tts)  |
-    | Monologue Logger  |                         | Canvas    (Lit)       |
-    | Scheduler         |                         | Device Pairing        |
-    +---------+---------+                         +-----------------------+
-              |
-              | FastAPI :5000
-              |
-    +---------v---------+
-    | ML & MEMORY       |
-    | (Python)          |
-    |                   |
-    | 4-Tier Memory     |
-    | World Model       |
-    | Capability Reg.   |
-    | Model Composer    |
-    | arXiv Crawler     |
-    | Goal Alignment    |
-    +-------------------+
+```mermaid
+graph TB
+    subgraph META["Metacognitive Layers"]
+        L3["Layer 3 (5-10min)<br/>Deep Self-Modification"]
+        L2["Layer 2 (5-30s)<br/>Async LLM Reflection"]
+        L1["Layer 1 (500ms)<br/>Fast FSM Controller"]
+    end
+
+    subgraph COG["Cognitive Core (TypeScript)"]
+        GW["Global Workspace"]
+        GM["Goal Manager"]
+        DR["Drive Registry"]
+        IE["Initiative Engine"]
+        ML["Monologue Logger"]
+        SC["Scheduler"]
+    end
+
+    subgraph INT["Integration Layer (TypeScript)"]
+        TG["Telegram (grammY)"]
+        MX["Matrix (sdk)"]
+        DC["Discord (discord.js)"]
+        VO["Voice I/O (edge-tts)"]
+        CA["Canvas (Lit)"]
+        DP["Device Pairing"]
+    end
+
+    subgraph PY["ML & Memory (Python)"]
+        MEM["4-Tier Memory"]
+        WM["World Model"]
+        CR["Capability Registry"]
+        MC["Model Composer (MoA)"]
+        RES["Research Pipeline"]
+        GA["Goal Alignment"]
+    end
+
+    META --> COG
+    COG <-->|"WebSocket :18789"| INT
+    COG <-->|"FastAPI :5000"| PY
+    RES -->|"Daily arXiv + GitHub"| GA
+    GA -->|"Self-Improvement"| META
 ```
 
 ### Core Modules
@@ -149,7 +154,7 @@ These goals guide **every decision, every line of code, every research direction
 | `voice/` | TypeScript | ~200 | TTS (edge-tts, prosody-aware), STT (Whisper) |
 | `canvas/` | TypeScript | ~300 | CanvasRenderer, GoalGraph + DriveMonitor (Lit Web Components) |
 | `onboarding/` | TypeScript | ~300 | 6-step wizard ("Meet your mind"), Diagnostics |
-| `research/` | Python | ~400 | arXiv crawler, goal alignment scorer, concept generator |
+| `research/` | Python | ~1500 | arXiv crawler, GitHub scanner, deep analysis pipeline, goal alignment, self-improvement engine, progress tracker |
 
 ---
 
@@ -163,7 +168,7 @@ These goals guide **every decision, every line of code, every research direction
 | **Memory** | Chat history | RAG (BM25+Vec) | **4-Tier + Consolidation + World Model** |
 | **Models** | 1 per request | 1 per request | **MoA, Composition, Capability Registry** |
 | **Self-improvement** | None | None | **3-Layer Metacognitive Loop** |
-| **Research** | None | None | **Daily arXiv scan + auto-integration** |
+| **Research** | None | None | **Daily arXiv + GitHub scan, multi-model deep analysis, auto self-improvement** |
 
 ---
 
@@ -220,17 +225,22 @@ export OPENROUTER_API_KEY=your_key
 | Mixture of Agents (arXiv:2406.02428) | 2024 | `orchestrator/composer.py` &mdash; MoA consensus |
 | Fast-Slow Metacognition (ICML 2025) | 2025 | `cognition/metacontroller.ts` &mdash; 3-layer loop |
 | Cognitive Architectures for LLM Agents | 2025 | Overall CGA architecture |
+| Multi-Agent Debate (Du et al.) | 2023 | `research/deep_analysis.py` &mdash; Multi-model consensus |
+| Curiosity-Driven Exploration (Pathak) | 2019 | `cognition/drives/` &mdash; Knowledge gap detection |
 
 ---
 
 ## Tests
 
 ```bash
-# TypeScript (Vitest) — 60 tests
+# TypeScript (Vitest)
 pnpm test
 
-# Python (pytest) — 59 tests
+# Python (pytest)
 pytest memory/tests/ orchestrator/tests/ research/tests/
+
+# Full suite
+pnpm test && pytest
 ```
 
 ---
@@ -244,15 +254,53 @@ pytest memory/tests/ orchestrator/tests/ research/tests/
 - [x] Voice I/O (TTS + STT)
 - [x] Canvas (Lit Web Components)
 - [x] Model Orchestrator (Registry, Composer, MoA)
-- [x] 4-Tier Memory Server
+- [x] 4-Tier Memory Server (elias-memory backend)
 - [x] Onboarding Wizard + Diagnostics
 - [x] arXiv Research Crawler + Goal Alignment
+- [x] GitHub Repository Scanner (every 3 days)
+- [x] Deep Analysis Pipeline (multi-model consensus)
+- [x] Self-Improvement Engine + Progress Tracking
 - [ ] Matrix + Discord channels
-- [ ] elias-memory vector backend integration
 - [ ] CI/CD (GitHub Actions)
 - [ ] World Model (prediction + counterfactuals)
 - [ ] Theory of Mind module
+- [ ] Structured logging + OpenTelemetry observability
+- [ ] Desktop installer (systemd + npm/pip setup)
 - [ ] Embodied agent interface (device sensors as "body")
+
+---
+
+## Project Status
+
+> **This project is under active development (Work In Progress).**
+> Core architecture is implemented and tested. The research pipeline runs daily.
+> APIs, interfaces, and module boundaries may change without notice.
+
+---
+
+## API Overview
+
+| Service | Port | Protocol | Endpoints |
+|---------|------|----------|-----------|
+| Gateway | 18789 | WebSocket | `connect`, `broadcast`, `health` |
+| Memory | 5000 | HTTP/REST | `/memory/store`, `/memory/query`, `/memory/consolidate`, `/memory/knowledge-gaps`, `/memory/skill-rates` |
+| Health | 5000 | HTTP | `/health` |
+
+Full API documentation is generated from source (FastAPI auto-docs at `/docs` when running the memory server).
+
+---
+
+## Contributing
+
+Contributions are welcome. Please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/your-feature`)
+3. Write tests for new functionality
+4. Ensure all tests pass (`pnpm test && pytest`)
+5. Submit a Pull Request
+
+For large changes, open an issue first to discuss the approach.
 
 ---
 

@@ -31,11 +31,17 @@ export class GlobalWorkspace {
     this.items.set(id, entry);
     this.evictExpired();
 
-    // Keep workspace bounded
+    // Keep workspace bounded — O(n) scan instead of O(n log n) sort
     if (this.items.size > MAX_ITEMS) {
-      const oldest = [...this.items.entries()]
-        .sort((a, b) => a[1].priority - b[1].priority)[0];
-      if (oldest) this.items.delete(oldest[0]);
+      let lowestKey: string | null = null;
+      let lowestPriority = Infinity;
+      for (const [key, it] of this.items) {
+        if (it.priority < lowestPriority) {
+          lowestPriority = it.priority;
+          lowestKey = key;
+        }
+      }
+      if (lowestKey) this.items.delete(lowestKey);
     }
 
     this.bus.next({
@@ -53,10 +59,15 @@ export class GlobalWorkspace {
     this.evictExpired();
     if (this.items.size === 0) return null;
 
-    const sorted = [...this.items.values()]
-      .sort((a, b) => b.priority - a.priority);
+    // O(n) scan for highest priority instead of O(n log n) sort
+    let highest: WorkspaceItem | null = null;
+    for (const item of this.items.values()) {
+      if (!highest || item.priority > highest.priority) {
+        highest = item;
+      }
+    }
 
-    this.spotlight = sorted[0];
+    this.spotlight = highest;
 
     this.bus.next({
       type: 'workspace:focus',

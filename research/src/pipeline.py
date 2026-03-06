@@ -29,6 +29,7 @@ from .arxiv_crawler import crawl_and_score, save_report, print_report, ScoredPap
 from .github_scanner import scan_and_score as github_scan, save_github_report, print_github_report
 from .deep_analysis import (
     analyze_paper_deeply,
+    ConsensusAnalysis,
     ProgressTracker,
     ProgressEntry,
 )
@@ -115,6 +116,9 @@ async def run_full_pipeline(
         if sp.alignment.recommendation in ("implement", "study")
     ][:5]  # Max 5 deep analyses per run
 
+    # Cache consensus results for reuse in Phase 4
+    consensus_cache: list[ConsensusAnalysis] = []
+
     for sp in top_papers:
         if verbose:
             print(f"  Analyzing: {sp.paper.title[:60]}...")
@@ -129,6 +133,7 @@ async def run_full_pipeline(
             )
 
             tracker.record_analysis(consensus)
+            consensus_cache.append(consensus)
 
             results["deep_analyses"].append({
                 "title": sp.paper.title[:80],
@@ -154,25 +159,10 @@ async def run_full_pipeline(
         print("\n[Phase 4/5] Registering self-improvement actions...")
 
     total_actions = 0
-    for analysis in results["deep_analyses"]:
-        # Actions were already generated during deep analysis
-        pass
-
-    # Register from deep analyses
-    for sp in top_papers:
-        try:
-            consensus = await analyze_paper_deeply(
-                title=sp.paper.title,
-                abstract=sp.paper.abstract,
-                url=sp.paper.url,
-                alignment=sp.alignment,
-                models=deep_analysis_models,
-            )
-            for action in consensus.self_improvement_actions:
-                tracker.propose_improvement(action)
-                total_actions += 1
-        except Exception:
-            continue
+    for consensus in consensus_cache:
+        for action in consensus.self_improvement_actions:
+            tracker.propose_improvement(action)
+            total_actions += 1
 
     results["improvements_proposed"] = total_actions
 
